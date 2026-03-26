@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Mini Banking Transaction Simulator — DBMS Course Project demonstrating ACID, 2PL, and Deadlock Detection">
+  <title>MBTS — Mini Banking Transaction Simulator</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ─── Header ─────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <span>🏦 MBTS</span>
+    <div class="pill">v1.0</div>
+  </div>
+  <div class="status-row">
+    <span class="badge green">Node.js :5000</span>
+    <span class="badge">Flask :6000</span>
+    <span class="badge">MongoDB Atlas</span>
+    <span id="demo-indicator" class="running-badge" style="display:none"><span class="dot-pulse"></span>Demo Running</span>
+  </div>
+</header>
+
+<!-- ─── Demo Toolbar ───────────────────────────────────────────────── -->
+<div class="demo-toolbar">
+  <span class="toolbar-label">🎬 Demos</span>
+  <button class="btn btn-demo btn-sm" onclick="demoSerial()">▶ Serial Schedule</button>
+  <button class="btn btn-demo btn-sm" onclick="demoConcurrent()">▶ Concurrent Schedule</button>
+  <button class="btn btn-demo btn-sm" onclick="demoDeadlockResolve()">▶ Deadlock + Resolve</button>
+  <button class="btn btn-danger btn-sm" onclick="resetSystem()" style="margin-left:auto">🔄 Reset System</button>
+</div>
+
+<main>
+
+<!-- ═══ Panel 1: Accounts ══════════════════════════════════════════ -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><div class="icon icon-blue">💰</div>Accounts Overview</div>
+    <button class="btn btn-ghost btn-sm" onclick="loadAccounts()">↻ Refresh</button>
+  </div>
+  <div class="tbl-wrap">
+    <table id="accounts-table">
+      <thead><tr><th>Account ID</th><th>Customer</th><th>Balance</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label>Account ID</label><input id="new-acc-id" placeholder="ACC1005"></div>
+    <div class="form-group"><label>Name</label><input id="new-acc-name" placeholder="Eve"></div>
+    <div class="form-group"><label>Balance</label><input id="new-acc-balance" type="number" placeholder="1000"></div>
+    <button class="btn btn-primary btn-sm" onclick="createAccount()">+ Create</button>
+  </div>
+</div>
+
+<!-- ═══ Panel 2: Transaction Control ═══════════════════════════════ -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><div class="icon icon-purple">⚡</div>Transaction Control</div>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label>Transaction ID</label><input id="txn-id" placeholder="T1"></div>
+    <div class="form-group"><label>Account ID</label><input id="txn-acc" placeholder="ACC1001"></div>
+    <div class="form-group"><label>Amount</label><input id="txn-amount" type="number" placeholder="500"></div>
+    <div class="form-group"><label>Operation</label>
+      <select id="txn-op">
+        <option value="deposit">Deposit</option>
+        <option value="withdrawal">Withdrawal</option>
+        <option value="transfer">Transfer</option>
+      </select>
+    </div>
+    <div class="form-group" id="txn-target-group" style="display:none">
+      <label>Target Account</label><input id="txn-target" placeholder="ACC1002">
+    </div>
+  </div>
+  <div class="btn-group">
+    <button class="btn btn-primary btn-sm" onclick="txnBegin()">▶ BEGIN</button>
+    <button class="btn btn-primary btn-sm" onclick="txnRead()">📖 READ</button>
+    <button class="btn btn-warning btn-sm" onclick="txnWrite()">✏️ WRITE</button>
+    <button class="btn btn-success btn-sm" onclick="txnCommit()">✅ COMMIT</button>
+    <button class="btn btn-danger btn-sm" onclick="txnRollback()">↩ ROLLBACK</button>
+  </div>
+  <div id="txn-result">Ready.</div>
+</div>
+
+<!-- ═══ Panel 3: Lock Table ════════════════════════════════════════ -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><div class="icon icon-yellow">🔒</div>Lock Table (2PL)</div>
+    <button class="btn btn-ghost btn-sm" onclick="loadLockTable()">↻ Refresh</button>
+  </div>
+  <div class="tbl-wrap">
+    <table id="lock-table">
+      <thead><tr><th>Data Item</th><th>Lock Type</th><th>Transaction</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <hr class="section-sep">
+  <div class="form-row">
+    <div class="form-group"><label>TXN ID</label><input id="lock-txn" placeholder="T1"></div>
+    <div class="form-group"><label>Account</label><input id="lock-acc" placeholder="ACC1001"></div>
+    <div class="form-group"><label>Type</label>
+      <select id="lock-type"><option value="S">S (Shared)</option><option value="X">X (Exclusive)</option></select>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="acquireLock()">🔒 Acquire</button>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label>Release all for TXN</label><input id="release-txn" placeholder="T1"></div>
+    <button class="btn btn-danger btn-sm" onclick="releaseAllLocks()">🔓 Release All</button>
+  </div>
+</div>
+
+<!-- ═══ Panel 4: Schedule Log ══════════════════════════════════════ -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><div class="icon icon-green">📋</div>Schedule Log</div>
+    <button class="btn btn-ghost btn-sm" onclick="loadScheduleLog()">↻ Refresh</button>
+  </div>
+  <div id="schedule-log"></div>
+  <div class="log-legend">
+    <span><span class="op-begin">■</span> Begin</span>
+    <span><span class="op-read">■</span> Read</span>
+    <span><span class="op-write">■</span> Write</span>
+    <span><span class="op-commit">■</span> Commit</span>
+    <span><span class="op-abort">■</span> Abort</span>
+  </div>
+</div>
+
+<!-- ═══ Panel 5: Deadlock Detector ═════════════════════════════════ -->
+<div class="card full-width">
+  <div class="card-header">
+    <div class="card-title"><div class="icon icon-red">🕸️</div>Deadlock Detector (Wait-For Graph)</div>
+  </div>
+  <div class="btn-group" style="margin-top:0;margin-bottom:14px">
+    <button class="btn btn-purple btn-sm" onclick="checkDeadlock()">🔍 Check Deadlock</button>
+    <button class="btn btn-primary btn-sm" onclick="showGraph()">📊 Show Graph</button>
+    <button class="btn btn-demo btn-sm" onclick="simulateDeadlock()">⚠️ Simulate Deadlock</button>
+  </div>
+  <div id="wfg-canvas" style="min-height:200px;border:1px solid var(--border);border-radius:7px;background:var(--surface2);padding:6px"></div>
+  <div id="deadlock-result" style="margin-top:14px">Click "Check Deadlock" to scan the system.</div>
+</div>
+
+</main>
+
+<div id="toast-container"></div>
+
+<script src="js/config.js"></script>
+<script src="js/visualizers.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

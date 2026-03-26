@@ -1,0 +1,13 @@
+{
+  "name": "api-layer",
+  "version": "1.0.0",
+  "description": "Node.js Express API Layer for MBTS",
+  "main": "server.js",
+  "dependencies": {
+    "express": "*",
+    "mongoose": "*",
+    "axios": "*",
+    "cors": "*",
+    "dotenv": "*"
+  }
+}

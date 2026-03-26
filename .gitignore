@@ -1,0 +1,30 @@
+# ─── Node.js ────────────────────────────────────────────
+node_modules/
+package-lock.json
+
+# ─── Python ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+env/
+
+# ─── Environment variables (contains secrets) ──────────
+.env
+
+# ─── IDE / Editor ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── OS files ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Logs ──────────────────────────────────────────────
+*.log
+npm-debug.log*
