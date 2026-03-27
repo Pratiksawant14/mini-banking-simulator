@@ -19,6 +19,7 @@
     <span class="badge green">Node.js :5000</span>
     <span class="badge">Flask :6000</span>
     <span class="badge">MongoDB Atlas</span>
+    <span id="auto-check-status" class="badge green">Auto-Check: ON</span>
     <span id="demo-indicator" class="running-badge" style="display:none"><span class="dot-pulse"></span>Demo Running</span>
   </div>
 </header>
@@ -74,6 +75,31 @@
       <label>Target Account</label><input id="txn-target" placeholder="ACC1002">
     </div>
   </div>
+  <hr class="section-sep">
+  <div class="pre-check-container" style="background:var(--surface2);padding:12px;border-radius:4px;margin-top:14px">
+    <div style="font-weight:600;font-size:12px;margin-bottom:8px;color:var(--primary)">🛡️ Pre-Execution Readiness Check</div>
+    <div class="form-row" style="gap:8px">
+      <div class="form-group" style="margin-bottom:0">
+        <label style="font-size:10px">Account ID</label>
+        <input id="pre-acc-id" placeholder="ACC1001" class="btn-sm" style="width:100px">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label style="font-size:10px">Lock Type</label>
+        <select id="pre-lock-type" class="btn-sm"><option value="S">S</option><option value="X">X</option></select>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="addPreflightLock()" style="margin-top:auto">+ Add Lock</button>
+    </div>
+    <div id="preflight-list" style="font-size:11px;margin-top:10px;color:var(--text-dim)">
+      <em>No locks added to check list yet.</em>
+    </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:12px">
+      <button class="btn btn-purple btn-sm" onclick="runPreflight()">🔍 Run Pre-Check</button>
+      <div id="preflight-status" style="font-size:11px;font-weight:600"></div>
+    </div>
+    <div id="preflight-conflicts" style="margin-top:10px;display:none">
+      <!-- Konflikt tabelle goes here -->
+    </div>
+  </div>
   <div class="btn-group">
     <button class="btn btn-primary btn-sm" onclick="txnBegin()">▶ BEGIN</button>
     <button class="btn btn-primary btn-sm" onclick="txnRead()">📖 READ</button>
@@ -125,6 +151,19 @@
     <span><span class="op-commit">■</span> Commit</span>
     <span><span class="op-abort">■</span> Abort</span>
   </div>
+  <hr class="section-sep">
+  <div class="serializability-container" style="padding:12px;background:var(--surface2);border-radius:4px">
+    <div style="font-weight:600;font-size:12px;margin-bottom:8px;color:var(--primary)">🧪 Serializability Validator</div>
+    <div class="form-row" style="gap:8px">
+      <div class="form-group" style="flex:1;margin-bottom:0">
+        <label style="font-size:10px">Transaction IDs (CSV)</label>
+        <input id="validate-txns" placeholder="T1, T2, T3" class="btn-sm">
+      </div>
+      <button class="btn btn-purple btn-sm" onclick="validateSchedule()" style="margin-top:auto">Validate</button>
+    </div>
+    <div id="validation-result" style="margin-top:10px;font-size:11px;font-weight:600"></div>
+    <div id="precedence-graph-container" style="margin-top:10px;min-height:150px;border:1px solid var(--border);border-radius:4px;background:var(--surface)"></div>
+  </div>
 </div>
 
 <!-- ═══ Panel 5: Deadlock Detector ═════════════════════════════════ -->
@@ -132,8 +171,16 @@
   <div class="card-header">
     <div class="card-title"><div class="icon icon-red">🕸️</div>Deadlock Detector (Wait-For Graph)</div>
   </div>
-  <div class="btn-group" style="margin-top:0;margin-bottom:14px">
+  <div class="btn-group" style="margin-top:0;margin-bottom:14px;align-items:center;gap:12px">
     <button class="btn btn-purple btn-sm" onclick="checkDeadlock()">🔍 Check Deadlock</button>
+    <div class="form-group" style="margin-bottom:0">
+      <label style="font-size:11px;opacity:0.8">Victim Strategy</label>
+      <select id="victim-strategy" class="btn-sm" style="background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 8px">
+        <option value="youngest">Youngest First (Age)</option>
+        <option value="least_work">Least Work (Undo Cost)</option>
+        <option value="most_locks">Most Locks (Resource Yield)</option>
+      </select>
+    </div>
     <button class="btn btn-primary btn-sm" onclick="showGraph()">📊 Show Graph</button>
     <button class="btn btn-demo btn-sm" onclick="simulateDeadlock()">⚠️ Simulate Deadlock</button>
   </div>

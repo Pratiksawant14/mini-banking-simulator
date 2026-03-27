@@ -121,6 +121,11 @@ async function loadLockTable() {
   });
 }
 
+// ─── Data Sync ──────────────────────────────────────────────────────
+async function refreshData() {
+  await Promise.all([loadAccounts(), loadLockTable(), loadScheduleLog()]);
+}
+
 // ─── Panel 4: Schedule Log ──────────────────────────────────────────
 async function loadScheduleLog() {
   const d = await apiGet('/actions/schedules');
@@ -131,21 +136,53 @@ async function loadScheduleLog() {
     const op = (e.operation||'').toLowerCase();
     const val = (e.old_value!=null&&e.new_value!=null) ? `${e.old_value}→${e.new_value}` : (e.new_value!=null ? String(e.new_value) : '');
     const cls = op==='commit'?'log-commit':op==='abort'?'log-abort':'';
-    return `<div class="log-entry ${cls}"><span class="log-ts">${ts}</span><span class="log-txn">${e.transaction_id}</span><span class="log-op op-${op}">${op.toUpperCase()}</span><span class="log-item">${e.data_item||''}</span><span class="log-vals">${val}</span></div>`;
+    const retryTag = e.retry_count ? `<span class="tag tag-retry" title="MongoDB Write Retries">🔄 ${e.retry_count}</span>` : '';
+    return `<div class="log-entry ${cls}"><span class="log-ts">${ts}</span><span class="log-txn">${e.transaction_id}</span><span class="log-op op-${op}">${op.toUpperCase()}</span><span class="log-item">${e.data_item||''}</span><span class="log-vals">${val}</span>${retryTag}</div>`;
   }).join('');
   box.scrollTop = box.scrollHeight;
 }
 
 // ─── Panel 5: Deadlock ──────────────────────────────────────────────
+async function autoCheckDeadlock() {
+  const strategy = document.getElementById('victim-strategy').value;
+  const res = await apiGet(`/actions/deadlock/auto-check?threshold=3&strategy=${strategy}`);
+  const statusEl = document.getElementById('auto-check-status');
+  
+  if (res.triggered) {
+    const cd = res.deadlock_result.cycle_detection, graph = res.deadlock_result.wait_for_graph||{};
+    const cycleNodes = cd?.cycle_found ? cd.cycle_path : [];
+    const victim = res.deadlock_result.resolution?.victim || null;
+    const box = document.getElementById('deadlock-result');
+    
+    box.innerHTML = `<div class="deadlock-cycle pulse">🤖 AUTO-TRIGGERED RESOLUTION</div><div>Reason: ${res.reason}</div><div class="deadlock-victim">⚡ Victim: ${victim} (${res.deadlock_result.resolution.strategy_used})</div>`;
+    showToast(`Auto-resolved deadlock! Victim: ${victim}`, 'success');
+    
+    renderWaitForGraph(graph, 'wfg-canvas', { cycleNodes, victim });
+    loadLockTable(); loadScheduleLog(); loadAccounts();
+    
+    if (statusEl) {
+      statusEl.textContent = 'Auto-Check: Active (Triggered!)';
+      statusEl.classList.add('active');
+      setTimeout(() => statusEl.classList.remove('active'), 2000);
+    }
+  } else {
+    if (statusEl) {
+      statusEl.textContent = 'Auto-Check: Active';
+      statusEl.classList.remove('active');
+    }
+  }
+}
+
 async function checkDeadlock() {
-  const res = await apiGet('/actions/deadlock/check');
+  const strategy = document.getElementById('victim-strategy').value;
+  const res = await apiGet(`/actions/deadlock/check?strategy=${strategy}`);
   const box = document.getElementById('deadlock-result');
   const cd = res.cycle_detection, graph = res.wait_for_graph||{};
   const cycleNodes = cd?.cycle_found ? cd.cycle_path : [];
   const victim = res.resolution?.victim || null;
   if (cd?.cycle_found) {
-    box.innerHTML = `<div class="deadlock-cycle">🔴 DEADLOCK DETECTED!</div><div>Cycle: ${cd.cycle_path.join(' → ')}</div><div class="deadlock-victim">⚡ Victim: ${victim}</div>`;
-    showToast(`Deadlock! Victim: ${victim}`,'error');
+    box.innerHTML = `<div class="deadlock-cycle">🔴 DEADLOCK DETECTED!</div><div>Cycle: ${cd.cycle_path.join(' → ')}</div><div class="deadlock-victim">⚡ Victim: ${victim} (${res.resolution.strategy_used})</div>`;
+    showToast(`Deadlock! Victim: ${victim} (${res.resolution.strategy_used})`,'error');
   } else {
     box.innerHTML = `<div class="deadlock-ok">✅ No Deadlock Detected</div><div>WFG: ${JSON.stringify(graph)}</div>`;
     showToast('No deadlock','success');
@@ -253,10 +290,116 @@ async function demoDeadlockResolve() {
   loadAccounts(); loadLockTable(); loadScheduleLog(); setDemoRunning(false);
 }
 
+let preflightLocks = [];
+
+function addPreflightLock() {
+  const acc = document.getElementById('pre-acc-id').value.trim();
+  const type = document.getElementById('pre-lock-type').value;
+  if (!acc) return showToast('Account ID required', 'error');
+  
+  preflightLocks.push({ account_id: acc, lock_type: type });
+  renderPreflightList();
+  document.getElementById('pre-acc-id').value = '';
+}
+
+function renderPreflightList() {
+  const list = document.getElementById('preflight-list');
+  if (preflightLocks.length === 0) {
+    list.innerHTML = '<em>No locks added to check list yet.</em>';
+    return;
+  }
+  list.innerHTML = preflightLocks.map((l, i) => `
+    <div class="pre-lock-item" style="display:inline-flex;align-items:center;background:var(--surface);padding:4px 8px;border-radius:4px;margin-right:6px;margin-bottom:6px;border:1px solid var(--border)">
+      <span class="tag tag-${l.lock_type}" style="margin-right:6px">${l.lock_type}</span>
+      <span class="mono" style="margin-right:8px">${l.account_id}</span>
+      <span style="cursor:pointer;opacity:0.6" onclick="removePreflightLock(${i})">×</span>
+    </div>
+  `).join('');
+}
+
+function removePreflightLock(idx) {
+  preflightLocks.splice(idx, 1);
+  renderPreflightList();
+}
+
+async function runPreflight() {
+  const statusEl = document.getElementById('preflight-status');
+  const conflictArea = document.getElementById('preflight-conflicts');
+  
+  if (preflightLocks.length === 0) {
+    statusEl.innerHTML = '<span style="color:var(--muted)">List is empty.</span>';
+    return;
+  }
+
+  statusEl.innerHTML = '<span class="pulse">⏳ Verifying...</span>';
+  conflictArea.style.display = 'none';
+
+  const res = await apiPost('/actions/preflight', { locks_needed: preflightLocks });
+  
+  if (res.ready) {
+    statusEl.innerHTML = '<span style="color:var(--accent2)">✅ All locks available — safe to proceed</span>';
+    showToast('Readiness Check: SUCCESS', 'success');
+  } else {
+    statusEl.innerHTML = '<span style="color:var(--accent)">❌ Conflicts detected</span>';
+    showToast('Readiness Check: CONFLICTS', 'error');
+    
+    conflictArea.innerHTML = `
+      <table class="tbl-sm" style="width:100%;font-size:10px;background:var(--surface);border-radius:4px">
+        <thead><tr style="opacity:0.6"><th>Account</th><th>Held By</th><th>Lock</th><th>Status</th></tr></thead>
+        <tbody>
+          ${res.conflicts.map(c => `
+            <tr><td class="mono">${c.account_id}</td><td class="mono" style="color:var(--accent)">${c.held_by}</td><td><span class="tag tag-${c.lock_type}">${c.lock_type}</span></td><td>${c.status}</td></tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+    conflictArea.style.display = 'block';
+  }
+  
+  preflightLocks = [];
+  renderPreflightList();
+}
+
+async function validateSchedule() {
+  const input = document.getElementById('validate-txns').value.trim();
+  const resEl = document.getElementById('validation-result');
+  const graphContainer = document.getElementById('precedence-graph-container');
+  
+  if (!input) return showToast('Enter transaction IDs', 'error');
+  
+  const ids = input.split(',').map(s => s.trim()).filter(s => s.length > 0);
+  if (ids.length === 0) return;
+
+  resEl.innerHTML = '<span class="pulse">🧪 Analyzing schedule...</span>';
+  graphContainer.innerHTML = '';
+
+  const res = await apiPost('/actions/validate-schedule', { transaction_ids: ids });
+  
+  if (!res.success) {
+    resEl.innerHTML = `<span style="color:var(--accent)">❌ Error: ${res.error}</span>`;
+    return;
+  }
+
+  const v = res.validation;
+  if (v.result === 'SERIALIZABLE') {
+    resEl.innerHTML = '<span style="color:var(--accent2)">✅ CONFLICT SERIALIZABLE — safe execution</span>';
+    showToast('Schedule is Serializable', 'success');
+  } else {
+    const cycle = v.cycle_edge ? `${v.cycle_edge[0]} → ${v.cycle_edge[1]}` : 'detected';
+    resEl.innerHTML = `<span style="color:var(--accent)">❌ NOT SERIALIZABLE — cycle at [${cycle}]</span>`;
+    showToast('Non-Serializable Schedule!', 'error');
+  }
+
+  renderPrecedenceGraph(v.graph, 'precedence-graph-container', v.result);
+}
+
 // ─── Init ───────────────────────────────────────────────────────────
+// Initial Load
 document.addEventListener('DOMContentLoaded', () => {
-  loadAccounts(); loadLockTable(); loadScheduleLog();
-  renderWaitForGraph({}, 'wfg-canvas');
+    refreshData();
+    setInterval(refreshData, 3000); // 3s for dashboard
+    setInterval(autoCheckDeadlock, 5000); // 5s for auto-deadlock
+
   document.getElementById('demo-indicator').style.display = 'none';
   document.getElementById('txn-op').addEventListener('change', e => {
     document.getElementById('txn-target-group').style.display = e.target.value==='transfer'?'flex':'none';

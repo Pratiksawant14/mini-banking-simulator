@@ -1,5 +1,6 @@
 import sys
 import os
+from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import db
@@ -50,19 +51,39 @@ def build_wait_for_graph() -> dict:
     return graph
 
 
-# ─── Cycle Detection (DFS) ────────────────────────────────────────────────────
+# ─── Cycle Detection (DFS + Fast Path) ────────────────────────────────────────
+
+def detect_length2_cycle(graph: dict) -> dict:
+    """
+    O(E) fast scan for direct two-transaction cycles (T1 -> T2 -> T1).
+    Catches the most common deadlock pattern instantly.
+    """
+    for u in graph:
+        for v in graph.get(u, []):
+            if v in graph and u in graph.get(v, []):
+                # Found a cycle T_i -> T_j -> T_i
+                return {
+                    "cycle_found": True,
+                    "cycle_path": [u, v, u],
+                    "method": "fast_path"
+                }
+
+    return {"cycle_found": False}
+
 
 def detect_cycle(graph: dict) -> dict:
     """
-    Detects cycles in the Wait-For Graph using iterative DFS.
-
-    Returns:
-      { "cycle_found": True,  "cycle_path": ["T1", "T2", "T1"] }  — if cycle exists
-      { "cycle_found": False }                                      — if no cycle
+    Detects cycles in the Wait-For Graph.
+    First tries the O(E) length-2 fast path, then falls back to full iterative DFS.
     """
+    # ─── 1. Call Fast Path first ───
+    fast_result = detect_length2_cycle(graph)
+    if fast_result["cycle_found"]:
+        return fast_result
+
+    # ─── 2. Fall back to Full DFS ───
     visited = set()       # Nodes fully processed
     rec_stack = set()     # Nodes in the current DFS path
-    path_tracker = {}     # parent map to reconstruct cycle path
 
     def dfs(node, path):
         visited.add(node)
@@ -71,7 +92,6 @@ def detect_cycle(graph: dict) -> dict:
 
         for neighbour in graph.get(node, []):
             if neighbour not in visited:
-                path_tracker[neighbour] = node
                 result = dfs(neighbour, path)
                 if result is not None:
                     return result
@@ -96,28 +116,82 @@ def detect_cycle(graph: dict) -> dict:
         if node not in visited:
             cycle = dfs(node, [])
             if cycle:
-                return {"cycle_found": True, "cycle_path": cycle}
+                return {
+                    "cycle_found": True,
+                    "cycle_path": cycle,
+                    "method": "full_dfs"
+                }
 
-    return {"cycle_found": False}
+    return {"cycle_found": False, "method": "full_dfs"}
+
+
+# ─── Victim Selection Strategies ─────────────────────────────────────────────
+
+def select_victim_least_work(cycle_path: list) -> str:
+    """
+    Selects the victim with the fewest 'write' operations in the schedules log.
+    Minimize the cost of undo/rollback.
+    """
+    unique_nodes = list(set(cycle_path[:-1]))
+    counts = {}
+    
+    for txn_id in unique_nodes:
+        # Count write operations in schedules collection
+        write_count = db["schedules"].count_documents({"transaction_id": txn_id, "operation": "write"})
+        counts[txn_id] = write_count
+
+    # Find minimum write count
+    min_writes = min(counts.values())
+    candidates = [t for t in unique_nodes if counts[t] == min_writes]
+    
+    # Tie-break: pick the one that appears latest in the cycle (youngest by position)
+    if len(candidates) > 1:
+        # Filter cycle_path to only include candidates and pick the last one
+        for node in reversed(cycle_path[:-1]):
+            if node in candidates:
+                return node
+    return candidates[0]
+
+
+def select_victim_most_locks(cycle_path: list) -> str:
+    """
+    Selects the victim holding the MOST granted locks.
+    Maximize the amount of resources freed for other transactions.
+    """
+    unique_nodes = list(set(cycle_path[:-1]))
+    counts = {}
+    
+    for txn_id in unique_nodes:
+        # Count granted locks in locks collection
+        lock_count = db["locks"].count_documents({"transaction_id": txn_id, "status": "granted"})
+        counts[txn_id] = lock_count
+
+    # Find maximum lock count
+    max_locks = max(counts.values())
+    candidates = [t for t in unique_nodes if counts[t] == max_locks]
+    
+    # Tie-break: pick the one that appears latest in the cycle (youngest by position)
+    if len(candidates) > 1:
+        for node in reversed(cycle_path[:-1]):
+            if node in candidates:
+                return node
+    return candidates[0]
 
 
 # ─── Deadlock Resolution ──────────────────────────────────────────────────────
 
-def resolve_deadlock(cycle_path: list) -> dict:
+def resolve_deadlock(cycle_path: list, strategy: str = "youngest") -> dict:
     """
-    Selects a victim from the cycle and aborts it.
-
-    Victim selection strategy:
-      The last unique node in the cycle path (before the repeated closing node).
-      This is the 'youngest' in the cycle based on position — simplest safe choice.
-
-    Steps:
-      1. Rollback the victim's writes (via transaction_mgr)
-      2. Release all its locks (via lock_mgr)
+    Selects a victim from the cycle using the specified strategy and aborts it.
     """
-    # cycle_path looks like ["T1", "T2", "T1"] — victim is second-to-last unique
-    unique_nodes = cycle_path[:-1]   # Strip the closing repeat
-    victim = unique_nodes[-1]        # Last node in the cycle = youngest/victim
+    if strategy == "least_work":
+        victim = select_victim_least_work(cycle_path)
+    elif strategy == "most_locks":
+        victim = select_victim_most_locks(cycle_path)
+    else:
+        # Default: youngest-first (last in cycle path)
+        unique_nodes = cycle_path[:-1]
+        victim = unique_nodes[-1]
 
     # Abort and clean up the victim
     rollback_result = rollback_transaction(victim)
@@ -126,21 +200,38 @@ def resolve_deadlock(cycle_path: list) -> dict:
     return {
         "success": True,
         "victim": victim,
+        "strategy_used": strategy,
         "action": "aborted and locks released",
         "rollback": rollback_result,
         "locks_released": lock_result["locks_removed"]
     }
 
 
+def check_timeout_triggers(threshold_sec: int = 3) -> dict:
+    """
+    Checks if any transaction has been waiting for a lock longer than threshold_sec.
+    Used for intelligent auto-detection.
+    """
+    now = datetime.utcnow()
+    waiting_locks = list(db["locks"].find({"status": "waiting"}))
+    
+    stale_locks = [
+        {"transaction_id": l["transaction_id"], "account_id": l["data_item"], "wait_time": (now - l["timestamp"]).total_seconds()}
+        for l in waiting_locks if l.get("timestamp") and (now - l["timestamp"]).total_seconds() > threshold_sec
+    ]
+
+    return {
+        "triggered": len(stale_locks) > 0,
+        "reason": "lock timeout exceeded" if stale_locks else None,
+        "stale_locks": stale_locks
+    }
+
+
 # ─── Full Deadlock Check Orchestrator ────────────────────────────────────────
 
-def run_deadlock_check() -> dict:
+def run_deadlock_check(strategy: str = "youngest") -> dict:
     """
-    Full orchestration:
-      1. Build the Wait-For Graph
-      2. Run cycle detection
-      3. If cycle found, resolve deadlock
-      4. Return full diagnostic result
+    Full orchestration with strategy-based victim selection.
     """
     graph = build_wait_for_graph()
     cycle_result = detect_cycle(graph)
@@ -152,7 +243,7 @@ def run_deadlock_check() -> dict:
     }
 
     if cycle_result["cycle_found"]:
-        resolution = resolve_deadlock(cycle_result["cycle_path"])
+        resolution = resolve_deadlock(cycle_result["cycle_path"], strategy=strategy)
         response["resolution"] = resolution
 
     return response

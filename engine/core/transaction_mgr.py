@@ -7,7 +7,8 @@ from models.db_models import (
     update_balance,
     insert_log,
     insert_transaction,
-    update_transaction_status
+    update_transaction_status,
+    increment_retry_count
 )
 from config import db
 from datetime import datetime
@@ -22,6 +23,7 @@ def begin_transaction(transaction_id: str, txn_type: str):
         "transaction_id": transaction_id,
         "type": txn_type,
         "status": "active",
+        "retry_count": 0
     })
 
     insert_log({
@@ -62,13 +64,25 @@ def read_value(transaction_id: str, account_id: str):
 
 def write_value(transaction_id: str, account_id: str, old_value: float, new_value: float):
     """
-    Writes a new balance to an account.
-    Logs the 'write' operation (with old and new values) for rollback support.
+    Writes a new balance to an account with a retry loop for transient failures.
+    Logs the 'write' operation with retry_count for Opt 6.
     """
-    success = update_balance(account_id, new_value)
+    MAX_RETRIES = 3
+    retries = 0
+    success = False
+
+    while retries < MAX_RETRIES:
+        success = update_balance(account_id, new_value)
+        if success:
+            break
+        
+        # If write failed (e.g. WriteConflict), increment counters
+        retries += 1
+        increment_retry_count(transaction_id)
+        # Small sleep could be added here if needed for backoff
 
     if not success:
-        return {"success": False, "error": f"Failed to update account {account_id}"}
+        return {"success": False, "error": f"Failed to update account {account_id} after {MAX_RETRIES} retries"}
 
     insert_log({
         "transaction_id": transaction_id,
@@ -76,10 +90,16 @@ def write_value(transaction_id: str, account_id: str, old_value: float, new_valu
         "data_item": account_id,
         "old_value": old_value,
         "new_value": new_value,
+        "retry_count": retries,
         "timestamp": datetime.utcnow()
     })
 
-    return {"success": True, "account_id": account_id, "new_balance": new_value}
+    return {
+        "success": True, 
+        "account_id": account_id, 
+        "new_balance": new_value,
+        "retries_at_write": retries
+    }
 
 
 def commit_transaction(transaction_id: str):
@@ -87,6 +107,10 @@ def commit_transaction(transaction_id: str):
     Commits a transaction — marks it 'committed' and logs a 'commit' entry.
     """
     update_transaction_status(transaction_id, "committed")
+    
+    # Fetch final counts
+    txn_doc = db["transactions"].find_one({"transaction_id": transaction_id})
+    final_retries = txn_doc.get("retry_count", 0) if txn_doc else 0
 
     insert_log({
         "transaction_id": transaction_id,
@@ -94,10 +118,15 @@ def commit_transaction(transaction_id: str):
         "data_item": None,
         "old_value": None,
         "new_value": None,
+        "retry_count": final_retries,
         "timestamp": datetime.utcnow()
     })
 
-    return {"success": True, "status": "committed"}
+    return {
+        "success": True, 
+        "status": "committed",
+        "total_retries": final_retries
+    }
 
 
 def rollback_transaction(transaction_id: str):

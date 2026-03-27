@@ -13,12 +13,15 @@ from core.lock_mgr import (
     acquire_lock,
     release_lock,
     release_all_locks,
-    get_lock_table
+    get_lock_table,
+    preflight_check
 )
 from core.deadlock_detector import (
     build_wait_for_graph,
-    run_deadlock_check
+    run_deadlock_check,
+    check_timeout_triggers
 )
+from core.serializability import validate_schedule
 
 app = Flask(__name__)
 CORS(app)
@@ -119,6 +122,15 @@ def lock_release_all():
     return jsonify(release_all_locks(transaction_id)), 200
 
 
+@app.route("/preflight", methods=["POST"])
+def preflight():
+    """Performs a pre-execution readiness check for a set of locks."""
+    data = request.json
+    locks_needed = data.get("locks_needed", [])
+    result = preflight_check(locks_needed)
+    return jsonify(result), 200
+
+
 @app.route("/lock/table", methods=["GET"])
 def lock_table():
     return jsonify(get_lock_table()), 200
@@ -136,8 +148,31 @@ def deadlock_graph():
 @app.route("/deadlock/check", methods=["GET"])
 def deadlock_check():
     """Runs a full deadlock check: builds WFG, detects cycles, resolves if found."""
-    result = run_deadlock_check()
+    strategy = request.args.get("strategy", "youngest")
+    result = run_deadlock_check(strategy=strategy)
     return jsonify(result), 200
+
+
+@app.route("/deadlock/auto-check", methods=["GET"])
+def deadlock_auto_check():
+    """Checks if any transaction is waiting too long; triggers full check if so."""
+    strategy = request.args.get("strategy", "youngest")
+    threshold = int(request.args.get("threshold", 3))
+    
+    status = check_timeout_triggers(threshold_sec=threshold)
+    
+    if status["triggered"]:
+        result = run_deadlock_check(strategy=strategy)
+        return jsonify({
+            "triggered": True,
+            "reason": status["reason"],
+            "deadlock_result": result
+        }), 200
+    
+    return jsonify({
+        "triggered": False,
+        "message": "No stale locks detected"
+    }), 200
 
 
 @app.route("/schedules", methods=["GET"])
@@ -149,6 +184,21 @@ def get_schedules():
         if "timestamp" in e and isinstance(e["timestamp"], datetime):
             e["timestamp"] = e["timestamp"].isoformat()
     return jsonify({"success": True, "schedules": entries}), 200
+
+
+@app.route("/validate-schedule", methods=["POST"])
+def schedule_validate():
+    """Builds precedence graph and checks for serializability of given transactions."""
+    data = request.json
+    transaction_ids = data.get("transaction_ids", [])
+    if not transaction_ids:
+        return jsonify({"success": False, "error": "transaction_ids are required"}), 400
+    
+    result = validate_schedule(transaction_ids)
+    return jsonify({
+        "success": True,
+        "validation": result
+    }), 200
 
 
 # ─── System Reset ────────────────────────────────────────────────────────────

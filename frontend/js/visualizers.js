@@ -186,3 +186,95 @@ function renderWaitForGraph(graph, containerId, options = {}) {
   container.innerHTML = '';
   container.appendChild(svg);
 }
+
+/**
+ * Renders the Precedence Graph for Conflict Serializability
+ */
+function renderPrecedenceGraph(graph, containerId, result) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const nodes = new Set();
+  const edges = [];
+  Object.entries(graph).forEach(([from, targets]) => {
+    nodes.add(from);
+    targets.forEach(to => {
+      nodes.add(to);
+      edges.push({ from, to });
+    });
+  });
+
+  if (nodes.size === 0) {
+    container.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">No transactions available for graph.</div>';
+    return;
+  }
+
+  const nodeArr = [...nodes];
+  const W = container.clientWidth || 500, H = 200;
+  const cx = W / 2, cy = H / 2, r = Math.min(W, H) * 0.35;
+  const pos = {};
+  nodeArr.forEach((node, i) => {
+    const angle = (2 * Math.PI * i) / nodeArr.length - Math.PI / 2;
+    pos[node] = { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+  });
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+
+  // Defs for arrows
+  const defs = document.createElementNS(svgNS, 'defs');
+  const isSerializable = result === 'SERIALIZABLE';
+  const arrowColor = isSerializable ? '#3fb950' : '#f85149';
+  
+  const marker = document.createElementNS(svgNS, 'marker');
+  marker.setAttribute('id', 'prec-arrow');
+  marker.setAttribute('markerWidth', '6'); marker.setAttribute('markerHeight', '6');
+  marker.setAttribute('refX', '5'); marker.setAttribute('refY', '3'); marker.setAttribute('orient', 'auto');
+  const path = document.createElementNS(svgNS, 'path');
+  path.setAttribute('d', 'M0,0 L0,6 L6,3 z'); path.setAttribute('fill', arrowColor);
+  marker.appendChild(path);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+
+  // Draw Edges
+  edges.forEach(({ from, to }) => {
+    const p1 = pos[from], p2 = pos[to];
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    const NODE_R = 18;
+    const startX = p1.x + (dx/len)*NODE_R, startY = p1.y + (dy/len)*NODE_R;
+    const endX = p2.x - (dx/len)*NODE_R, endY = p2.y - (dy/len)*NODE_R;
+
+    const line = document.createElementNS(svgNS, 'line');
+    line.setAttribute('x1', startX); line.setAttribute('y1', startY);
+    line.setAttribute('x2', endX); line.setAttribute('y2', endY);
+    line.setAttribute('stroke', arrowColor);
+    line.setAttribute('stroke-width', '1.5');
+    line.setAttribute('marker-end', 'url(#prec-arrow)');
+    svg.appendChild(line);
+  });
+
+  // Draw Nodes
+  nodeArr.forEach(node => {
+    const { x, y } = pos[node];
+    const circle = document.createElementNS(svgNS, 'circle');
+    circle.setAttribute('cx', x); circle.setAttribute('cy', y); circle.setAttribute('r', 18);
+    circle.setAttribute('fill', '#1e2530');
+    circle.setAttribute('stroke', arrowColor);
+    circle.setAttribute('stroke-width', '2');
+    svg.appendChild(circle);
+
+    const txt = document.createElementNS(svgNS, 'text');
+    txt.setAttribute('x', x); txt.setAttribute('y', y + 4);
+    txt.setAttribute('text-anchor', 'middle');
+    txt.setAttribute('fill', '#e6edf3');
+    txt.setAttribute('font-size', '10');
+    txt.setAttribute('font-family', 'JetBrains Mono, monospace');
+    txt.textContent = node;
+    svg.appendChild(txt);
+  });
+
+  container.innerHTML = '';
+  container.appendChild(svg);
+}

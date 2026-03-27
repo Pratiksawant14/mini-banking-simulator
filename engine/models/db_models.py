@@ -36,3 +36,17 @@ def update_transaction_status(txn_id: str, status: str):
         {"$set": {"status": status, "end_time": datetime.utcnow()}}
     )
     return result.modified_count > 0
+
+
+def get_transaction_timestamp(transaction_id: str):
+    """Fetch the start_time of a transaction for Wound-Wait age comparison."""
+    txn = db["transactions"].find_one({"transaction_id": transaction_id}, {"_id": 0, "start_time": 1})
+    return txn["start_time"] if txn else None
+
+
+def increment_retry_count(transaction_id: str):
+    """Increments the retry_count for a transaction in the transactions collection."""
+    db["transactions"].update_one(
+        {"transaction_id": transaction_id},
+        {"$inc": {"retry_count": 1}}
+    )

@@ -19,7 +19,8 @@ async function forwardPost(enginePath, req, res) {
 
 async function forwardGet(enginePath, req, res) {
   try {
-    const response = await axios.get(`${PYTHON_ENGINE}${enginePath}`);
+    const queryStr = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+    const response = await axios.get(`${PYTHON_ENGINE}${enginePath}${queryStr}`);
     res.json(response.data);
   } catch (err) {
     const status = err.response?.status || 500;
@@ -38,18 +39,21 @@ router.post('/transaction/rollback', (req, res) => forwardPost('/transaction/rol
 
 // ─── Lock forwarding routes ───────────────────────────────────────────────────
 
-router.post('/lock/acquire',      (req, res) => forwardPost('/lock/acquire',      req, res));
-router.post('/lock/release-all',  (req, res) => forwardPost('/lock/release-all',  req, res));
+router.post('/lock/acquire',      (req, res) => forwardPost('/actions/lock/acquire',      req, res));
+router.post('/lock/release-all',  (req, res) => forwardPost('/actions/lock/release-all',  req, res));
+router.post('/preflight',        (req, res) => forwardPost('/preflight', req, res));
 router.get ('/lock/table',        (req, res) => forwardGet ('/lock/table',        req, res));
 
 // ─── Deadlock forwarding routes ───────────────────────────────────────────────
 
 router.get('/deadlock/check', (req, res) => forwardGet('/deadlock/check', req, res));
+router.get('/deadlock/auto-check', (req, res) => forwardGet('/deadlock/auto-check', req, res));
 router.get('/deadlock/graph', (req, res) => forwardGet('/deadlock/graph', req, res));
 router.get('/schedules',      (req, res) => forwardGet('/schedules',      req, res));
 
 // ─── System Reset ─────────────────────────────────────────────────────────────
 
+router.post('/validate-schedule', (req, res) => forwardPost('/validate-schedule', req, res));
 router.post('/reset', (req, res) => forwardPost('/reset', req, res));
 
 module.exports = router;
