@@ -39,8 +39,8 @@ router.post('/transaction/rollback', (req, res) => forwardPost('/transaction/rol
 
 // ─── Lock forwarding routes ───────────────────────────────────────────────────
 
-router.post('/lock/acquire',      (req, res) => forwardPost('/actions/lock/acquire',      req, res));
-router.post('/lock/release-all',  (req, res) => forwardPost('/actions/lock/release-all',  req, res));
+router.post('/lock/acquire',      (req, res) => forwardPost('/lock/acquire',      req, res));
+router.post('/lock/release-all',  (req, res) => forwardPost('/lock/release-all',  req, res));
 router.post('/preflight',        (req, res) => forwardPost('/preflight', req, res));
 router.get ('/lock/table',        (req, res) => forwardGet ('/lock/table',        req, res));
 
