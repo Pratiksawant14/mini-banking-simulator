@@ -239,5 +239,5 @@ def reset_system():
 
 
 if __name__ == "__main__":
-    print("🚀 Python Flask Engine starting on port 6000...")
+    print("[STARTING] Python Flask Engine starting on port 6000...")
     app.run(host="0.0.0.0", port=6000, debug=True)
